@@ -1,0 +1,1136 @@
+---
+title: "Advanced Econometrics Project"
+output: 
+  pdf_document:
+            toc: true       # Enable the table of contents
+            toc_depth: 3    # Depth of headings to include in the TOC (h1 to h3)
+            number_sections: true  # Number the sections in TOC and in the document
+---
+
+
+Date: 22/04/2024  
+
+Module title: Advanced Econometrics  
+
+Course: BSc Economics with Econometrics  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+	# Load the necessary packages:
+
+library(dynamac)          # For ARDL estimation
+library(forecast)         # For ARIMA model estimation
+library(tseries)          # for time series models and diagnostic checks
+library(nlme)             # to estimate ARIMA models
+library(pdfetch)          # to fetch data directly from online data bases
+library(zoo)              # for the zoo function for daily time series
+library(urca)             # for unit root tests
+library(vars)             # for Granger tests and VAR estimation
+library(car)              # for regression diagnostics and hypothesis testing
+library(dynlm)            # for Vector Error Correction Model(VECM)
+library(tsDyn)            # for linear and non-linear VAR and VECM models
+library(gets)             # for Isat function: step and impsulse indicator saturation
+library(readxl)           # to read Excel files and load the data from Excel files
+library(aod)              # for Wald tests
+library(egcm)             # Engle-Granger cointegration test
+library(aTSA)             # Engle-Granger cointegration test
+library(urca)
+library(aTSA)
+
+
+```
+
+# Introduction
+
+In this project we will use Inflation growth which is calculated from the Consumer Price Index Data set, and the TCU(capacity utilisation), which measures the extent to which a nation utilizes its productive capacity. We will try to understand whether these two variables cause one another, and we will do some forecasting for the inflation series. In the first part we plot the data, then we will check if the series have a unit root. Further we will check of these series are co integrated. If they are co integrated we will run the VEC model to understand their long run relationship. Prior to that we will run the ARDL model to understand how statistically significant are the past values to the present one for these two series. 
+
+
+```{r}
+rm(list=ls())
+      # Inflation rate in January 1948 = (CPI in Jan 1948 - CPI in Jan 1947)/ (CPI in Jan 1947) = (CPI in Jan 1948 / CPI in Jan 1947) - 1
+      # Hence we need to set: "Inflation = diff(log(CPI), lag = 12)*100"
+
+
+      # USA CPI for All Urban Consumers      - Seasonally Adjusted - Monthly (from January 1947):
+      # USA CPI Inflation rate, year on year - Seasonally Adjusted - Monthly (from January 1948)
+
+CPI = pdfetch_FRED("CPIAUCSL")
+names(CPI) = "CPI"
+
+Inflation = diff(log(CPI), lag = 12) * 100                   # Percent change from year ago
+names(Inflation) = "Inflation"
+
+Inflation = ts(Inflation, start=c(1947, 1), frequency=12)
+Inflation = na.omit(Inflation)                               # inflation series begins in January 1948
+
+
+      # Capacity Utilization: Total Index (TCU) - Percent of Capacity, Seasonally Adjusted - Monthly - (from January 1967):
+
+TCU = pdfetch_FRED("TCU")
+names(TCU) = "TCU"
+
+TCU = ts( TCU , start=c(1967, 1), frequency=12)
+#Inflation = log( Inflation   * 100 ) 
+
+# dataset in logs in logs 
+data.set = na.omit(
+           ts.intersect(
+
+	    Inflation,     # inflation is already the log of CPI which is the inflation growth
+	    TCU,
+           dframe=TRUE))
+
+      Inflation   = ts( data.set$Inflation,    start=c(1967, 1),  frequency=12)
+      TCU = ts( data.set$TCU,    start=c(1967, 1),  frequency=12)
+
+cor(Inflation,TCU)
+```
+
+```{r }
+    par( mfrow=c(2,2))                                                                       
+      plot( Inflation              , main = "Inflation in levels"                , lwd = 2 )
+      plot( TCU              , main = "TCU in levels"                , lwd = 2 )
+      plot( diff(Inflation)        , main = "Inflation in first differences"     , lwd = 2 )
+      plot( diff(TCU)        , main = "TCU in first differences"     , lwd = 2 )
+       
+```
+Analysing both plots we can see that TCU has a higher volatility during 2020. which creates residuals that are not normally distributed, hence it will affect the tests overall. 
+
+# Correlation between Inflation in levels and its lags
+
+```{r}
+	  lag.plot( Inflation,       6, do.lines=FALSE)       # levels
+	  lag.plot( diff(Inflation), 6, do.lines=FALSE)       # first diference
+```
+From these graphs we can infer that there is correlation between the inflation variable at time present and it's the past values. When there is correlation over time it could mean that there is persistence, hence the possibility of having a unit root.
+
+```{r}
+	lag.plot( TCU,       6, do.lines=FALSE)       # levels
+	lag.plot( diff(TCU), 6, do.lines=FALSE)       # first diference
+```
+From these graphs we can infer that there is correlation between the TCU variable at time present and it's the past values. When there is correlation over time it could mean that there is persistence, hence the possibility of having a unit root.
+    
+```{r}
+  par(mfrow=c(2,2))
+     acf(       Inflation   , main=" ACF for z (levels)"            )
+    pacf(       Inflation   , main="PACF for z (levels)"            )
+     acf(  diff(Inflation)  , main=" ACF for z (first difference)"  )
+    pacf(  diff(Inflation)  , main="PACF for z (first difference)"  )
+```
+
+```{r}
+  par(mfrow=c(2,2))
+     acf(       TCU   , main=" ACF for z (levels)"            )
+    pacf(       TCU   , main="PACF for z (levels)"            )
+     acf(  diff(TCU)  , main=" ACF for z (first difference)"  )
+    pacf(  diff(TCU)  , main="PACF for z (first difference)"  )
+    
+```
+These graphs indicate strong persistence. The Strong persistences disappears when taking first differences this could indicate that there is a unit root in both series. 
+
+# Unit root tests.
+
+In this part of the project we will run the unit root tests. We will run the Augmented Dickey-Fuller Test Unit Root Test, the Phillips-Perron Unit Root Test, and the KPSS Unit Root Test. 
+
+## Unit root test on the inflation data in levels.
+
+```{r}
+
+      # Maximum number of lags ("p max") to be used in the unit root tests:
+      # Following formula 9.4.31 in Hayashi (2000, p.594, chapter 9)
+
+	max.lags = (12*((length(Inflation)/100) ^(1/4))) |> trunc()
+	max.lags
+	
+      # Now run each unit root test:
+
+
+      # Augmented Dickey-Fuller(ADF) tests on the chosen series:
+      # Using BIC to determine the number of lags
+      # ADF:  Ho = series has a unit root = integrated I(1) process
+
+
+	ur.df( Inflation,  type="none"   , selectlags="BIC",  lags=max.lags ) |> summary()    # from package "urca"
+	ur.df( Inflation,  type="drift"  , selectlags="BIC",  lags=max.lags ) |> summary()
+	ur.df( Inflation,  type="trend"  , selectlags="BIC",  lags=max.lags ) |> summary()
+                                                      
+```
+We do not reject the null hypotheses in levels, This means that the time series is non stationary. Unit root I(1). A unit root implies that the series has a stochastic trend.
+
+```{r}
+
+
+      # Philips-Perron(PP) tests on the chosen series:
+      # PP:  Ho = series has a unit root = integrated I(1) process
+      # PP test = DF test + robust to serial correlation by using the Newey–West HAC covariance matrix
+
+
+	ur.pp( Inflation, type="Z-tau"  ,  model="constant" , lags="long" ) |> summary()    # from package "urca"
+	ur.pp( Inflation, type="Z-tau"  ,  model="trend"    , lags="long" ) |> summary() 
+
+
+```
+We reject the null hypothesis tha there is a unit root, so there is no unit root  at the 5 percent confidence interval using the Philips-Perron(PP) test.
+
+```{r}
+
+      # KPSS tests on the chosen series:
+      # KPSS:   Ho = series does not have a unit root [opposite of ADF and PP]
+      # 
+      # "mu"  = constant 
+      # "tau" = constant + linear trend 
+
+
+	ur.kpss( Inflation, type="mu"  ,  lags="long" ) |> summary()     # from package "urca"
+	ur.kpss( Inflation, type="tau" ,  lags="long" ) |> summary()
+
+        
+``` 
+We reject the null hypotheses which means that according to the test there is a unit root, thus being non stationary, having a stochastic trend.
+
+Overall out of 3 tests tow of them show that there is a unit root, while the Philips-Perron(PP) test shows that there is no unit root at the 5% confidence intervall.
+
+### Unit root for inflation time series in first differences.
+
+```{r}
+      # Augmented Dickey-Fuller(ADF) tests on the chosen series:
+      # Using BIC to determine the number of lags
+      # ADF:  Ho = series has a unit root = integrated I(1) process
+
+
+	ur.df( diff(Inflation),  type="none"   , selectlags="BIC",  lags=max.lags ) |> summary()    # from package "urca"
+	ur.df( diff(Inflation),  type="drift"  , selectlags="BIC",  lags=max.lags ) |> summary()
+	ur.df( diff(Inflation),  type="trend"  , selectlags="BIC",  lags=max.lags ) |> summary()
+
+
+```
+
+```{r}
+      # Philips-Perron(PP) tests on the chosen series:
+      # PP:  Ho = series has a unit root = integrated I(1) process
+      # PP test = DF test + robust to serial correlation by using the Newey–West HAC covariance matrix
+
+	ur.pp( diff(Inflation), type="Z-tau"  ,  model="constant" , lags="long" ) |> summary()    # from package "urca"
+	ur.pp( diff(Inflation), type="Z-tau"  ,  model="trend"    , lags="long" ) |> summary() 
+```
+
+```{r}
+      # KPSS tests on the chosen series:
+      # KPSS:   Ho = series does not have a unit root [opposite of ADF and PP]
+      # 
+      # "mu"  = constant 
+      # "tau" = constant + linear trend 
+
+
+	ur.kpss( diff(Inflation), type="mu"  ,  lags="long" ) |> summary()     # from package "urca"
+	ur.kpss( diff(Inflation), type="tau" ,  lags="long" ) |> summary()
+
+``` 
+The Unit root tests show that there is a unit root in levels for the Inflation, while there is strong evidence that there is no unit root for the inflation in first differences.
+
+## Unit root test for TCU in levels.
+
+```{r}
+
+      # Maximum number of lags ("p max") to be used in the unit root tests:
+      # Following formula 9.4.31 in Hayashi (2000, p.594, chapter 9)
+
+	max.lags = (12*((length(TCU)/100) ^(1/4))) |> trunc()
+	max.lags
+
+```
+
+```{r}
+
+      # Augmented Dickey-Fuller(ADF) tests on the chosen series:
+      # Using BIC to determine the number of lags
+      # ADF:  Ho = series has a unit root = integrated I(1) process
+
+
+	ur.df( TCU,  type="none"   , selectlags="BIC",  lags=max.lags ) |> summary()    # from package "urca"
+	ur.df( TCU,  type="drift"  , selectlags="BIC",  lags=max.lags ) |> summary()
+	ur.df( TCU,  type="trend"  , selectlags="BIC",  lags=max.lags ) |> summary()
+
+
+```
+```{r}
+      # Philips-Perron(PP) tests on the chosen series:
+      # PP:  Ho = series has a unit root = integrated I(1) process
+      # PP test = DF test + robust to serial correlation by using the Newey–West HAC covariance matrix
+
+
+	ur.pp( TCU, type="Z-tau"  ,  model="constant" , lags="long" ) |> summary()    # from package "urca"
+	ur.pp( TCU, type="Z-tau"  ,  model="trend"    , lags="long" ) |> summary() 
+
+
+
+
+```
+We reject the null hyphothesis so there is not a unit root in levels
+```{r}
+      # KPSS tests on the chosen series:
+      # KPSS:   Ho = series does not have a unit root [opposite of ADF and PP]
+      # 
+      # "mu"  = constant 
+      # "tau" = constant + linear trend 
+
+
+	ur.kpss( TCU, type="mu"  ,  lags="long" ) |> summary()     # from package "urca"
+	ur.kpss( TCU, type="tau" ,  lags="long" ) |> summary()
+
+
+```
+### Unit root test for TCU in first differences.
+
+```{r}
+
+      # Maximum number of lags ("p max") to be used in the unit root tests:
+      # Following formula 9.4.31 in Hayashi (2000, p.594, chapter 9)
+
+	max.lags = (12*((length(diff(TCU))/100) ^(1/4))) |> trunc()
+	max.lags
+
+```
+
+```{r}
+
+
+      # Augmented Dickey-Fuller(ADF) tests on the chosen series:
+      # Using BIC to determine the number of lags
+      # ADF:  Ho = series has a unit root = integrated I(1) process
+
+
+	ur.df( diff(TCU),  type="none"   , selectlags="BIC",  lags=max.lags ) |> summary()    # from package "urca"
+	ur.df( diff(TCU),  type="drift"  , selectlags="BIC",  lags=max.lags ) |> summary()
+	ur.df( diff(TCU),  type="trend"  , selectlags="BIC",  lags=max.lags ) |> summary()
+
+
+```
+
+```{r}
+      # Philips-Perron(PP) tests on the chosen series:
+      # PP:  Ho = series has a unit root = integrated I(1) process
+      # PP test = DF test + robust to serial correlation by using the Newey–West HAC covariance matrix
+
+
+	ur.pp( diff(TCU), type="Z-tau"  ,  model="constant" , lags="long" ) |> summary()    # from package "urca"
+	ur.pp( diff(TCU), type="Z-tau"  ,  model="trend"    , lags="long" ) |> summary() 
+
+
+
+```
+
+```{r}
+      # KPSS tests on the chosen series:
+      # KPSS:   Ho = series does not have a unit root [opposite of ADF and PP]
+      # 
+      # "mu"  = constant 
+      # "tau" = constant + linear trend 
+
+
+	ur.kpss( diff(TCU), type="mu"  ,  lags="long" ) |> summary()     # from package "urca"
+	ur.kpss( diff(TCU), type="tau" ,  lags="long" ) |> summary()
+
+```
+
+The  unit root tests show that we can reject the null hypothesis for the ADF and PP tests while we reject the null hypothesis for the KPSS, this means that there is a unit root in levels for the TCU series, while there is strong evidence that there is no unit root for the TCU time series in first differences.
+
+# Cointegration test for the dataset. 
+
+In this section we will check if the series are cointegrated. Cointegration means that the series could have a long run equilibrium. 
+
+```{r}
+
+  # Optimal Lag Selection
+	# Check the optimal lag length according to the information criteria:
+	# Using the "VARS" package
+
+
+VARselect(data.set, lag.max=5, type="none",  season = NULL, exogen = NULL)$selection
+VARselect(data.set, lag.max=5, type="const", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=5, type="trend", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=5, type="both",  season = NULL, exogen = NULL)$selection	  	             
+
+VARselect(data.set, lag.max=10, type="none",  season = NULL, exogen = NULL)$selection
+VARselect(data.set, lag.max=10, type="const", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=10, type="trend", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=10, type="both",  season = NULL, exogen = NULL)$selection	  	             
+
+VARselect(data.set, lag.max=20, type="none",  season = NULL, exogen = NULL)$selection
+VARselect(data.set, lag.max=20, type="const", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=20, type="trend", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=20, type="both",  season = NULL, exogen = NULL)$selection
+
+        # Now set the number of lags that will be used in our estimations:
+
+optimal.lags = 2
+
+```
+
+
+
+## Cointegration Analysis: Engle-Granger Test
+```{r}
+
+EGCM = egcm( TCU, Inflation, i1test="pp", urtest="pp", p.value=0.10)                   # in levels
+EGCM
+```
+```{r}
+EGCM = egcm( Y= TCU, X= Inflation, include.const   = TRUE) 
+EGCM
+```
+
+```{r}
+       # ------ Engle-Granger Methodology (using package "aTSA") --------------------
+
+coint.test(Inflation, TCU,           d = 0, nlag = NULL, output = TRUE)                             # in levels
+
+coint.test(Inflation,log(TCU),  d = 0, nlag = NULL, output = TRUE)                             # in logs
+
+coint.test(Inflation, TCU,                 d = 0, nlag = NULL, output = TRUE) 
+
+```
+
+## Cointegration Analysis: Johansen Test
+
+```{r}
+
+        # Null hypothesis: Ho = no cointegration (r=0)
+        # You need to reject the null to get cointegration (r=1).
+        # r = number of cointegration relations
+
+
+optimal.lags = 2
+
+
+
+	# Linear trend outside of the cointegrating vector; 
+	# No constant and no trend in the cointegrating vector
+
+
+johansen.none = ca.jo(data.set, type="eigen", ecdet="none",  K = optimal.lags, spec="longrun")
+	summary(johansen.none)
+
+
+johansen.none = ca.jo(data.set, type="trace", ecdet="none",  K = optimal.lags, spec="longrun")
+	summary(johansen.none)
+
+
+```
+The Johances test shows that the two series are cointegrated
+
+```{r}
+	# With constant in the cointegrating vector:
+
+
+johansen.const = ca.jo(data.set, type="eigen", ecdet="const",  K = optimal.lags, spec="longrun")
+	summary(johansen.const)
+
+
+johansen.const = ca.jo(data.set, type="trace", ecdet="const",  K = optimal.lags, spec="longrun")
+	summary(johansen.const)
+
+
+```
+The johansen test with a constant shows that they are cointegrated.
+
+## With trend in the cointegrating vector:
+```{r}
+
+
+
+johansen.trend = ca.jo(data.set, type="eigen", ecdet="trend",  K = optimal.lags, spec="longrun")
+	summary(johansen.trend)
+
+johansen.trend = ca.jo(data.set, type="trace", ecdet="trend",  K = optimal.lags, spec="longrun")
+	summary(johansen.trend)
+
+```
+
+
+
+
+
+From these tow tests we can see that the series are not cointegrated. This means that the short term equilibrium of the series will tend to get back to its long term trend. Knowing if the series are correlated is important to understand which model to use to do forecasting or causal inference. 
+
+
+# Auto-Regressive Distributed Lag (ARDL) Models
+```{r}
+
+
+lags = 2
+
+ARDL = dynardl(	
+                      TCU ~ Inflation,                                                # Inflation is the weakly exogenous variable here
+                                                                                            # TCU is the dependent variable
+                lags = list("Inflation" = 1,          "TCU" = 1             ),
+               diffs =    c("Inflation"                                          ),
+            lagdiffs = list("Inflation" = c(1:lags),  "TCU" = c(1:lags)     ),
+	
+                  ec = TRUE,
+            constant = TRUE,
+               trend = FALSE,
+
+            simulate = TRUE,              # Set this to "simulate = TRUE" when you want to plot the ARDL impulse-response functions
+            shockvar = "Inflation",       # Select which variable will receive the exogenous shock in the impulse-response functions
+               range = 50,
+                sims = 1000,
+            fullsims = TRUE,
+
+                data = data.set)
+
+
+summary(ARDL)
+
+
+	# Long-run relatiobship testing using the ARDL-bounds procedure and "pssbounds":
+
+
+pssbounds(ARDL)
+
+pssbounds(ARDL, restriction=TRUE)
+
+```
+
+
+```{r}
+
+
+
+	# Philips (2018): if the BG test indicates the presence of residual autocorrelation, 
+	# add lagged first-differences of the endogenous variable on the right hand side of the ARDL.
+	# The inclusion of lagged first-differences of the endogenous variable on the right hand side 
+	# of the ARDL should remove the autocorrelation from the ARDL residuals
+
+	# ARDL-bounds test procedure requires the residuals to be white noise
+
+dynardl.auto.correlated(ARDL) 
+
+
+```
+
+## ARDL Model Residuals and Additional Tests:
+```{r}
+
+ARDL.residuals =    ARDL$model$residuals
+ARDL.residuals = ts(ARDL$model$residuals,  start=c(1967, 1) ,  frequency=1)
+
+
+
+  par(mfrow = c(2, 2))
+      plot( ARDL.residuals )                 # Plot the residuals over time
+    abline( h=0, col="red" )
+      hist( ARDL.residuals, col="orange")    # Plot histogram of the residuals
+       acf( ARDL.residuals )                 # Plot ACF
+      pacf( ARDL.residuals )                 # Plot PACF
+
+
+jarque.bera.test(ARDL.residuals)      # Jarque-Bera test for normal residuals
+ 
+bds.test(ARDL.residuals)              # BDS test Ho: series of i.i.d. random variable
+
+bptest(ARDL$model)                    # Breusch-Pagan test against heteroskedasticity, Ho: no heteroskedasticity
+
+
+
+```
+Here the residuals are not serially correlated but they are not normally distributed as well , as we can see there is a long tail to the left, so the distribution is left skewed, since there are some extreme values.
+## ARDL Model with robust standard errors:
+```{r}
+
+      # Robust = corrected for heteroskedasticity and auto-correlation
+
+
+coeftest(ARDL$model, vcov.=NULL   )   # Estimated coefficients with standard errors
+coeftest(ARDL$model, vcov.=vcovHC )   # Estimated coefficients with HC standard errors
+coeftest(ARDL$model, vcov.=vcovHAC)   # Estimated coefficients with HAC standard errors
+
+
+
+
+```
+## Impulse-Response Functions for the ARDL model
+```{r}
+
+	# Counterfactual simulation of a response to a shock in some exogenous variable
+	
+	# simulate = TRUE
+	# shockvar = exogenous variable that will receive the impulse
+	# shockval = 1 standard deviation
+	# time     = when the shock happens
+	# sims     = 1,000 simulations to estimate the average response
+	# forceset = set the values of any exogenous variables used = it hold an exogenous variable at a certain specified value
+
+	# If the exogenous variable is in levels or lagged levels: shock will last for many periods
+	# If the exogenous variable is in differences or lagged differences: shock lasts for 1 period only
+	# Other variables are kept at their averages, and differences are set to zero
+	
+
+
+	# Impulse-Response plots:
+
+
+
+dynardl.all.plots(ARDL)  # all plots together
+
+
+```
+
+According to this ARDL model there is a statistical significance that the there is a relationship between these two series in the long run. From the model we can understand that previous instances of the variables affect the current value of it. We used the error correction form in order check whether the the variables go back to its long run equilibrium, and we used it also because the two variables are cointegrated.  We saw that the residuals of the model are not normally distributed, this due to the TCU dataset. 
+
+Breusch-Godfrey LM Test for autocorrelation and the Jarque Bera Test for normality of residuals indicate potential issues with the residuals,The Shapiro-Wilk Test similarly indicates that residuals do not follow a normal distribution. We have seen that this could have been caused by the TCU data, which had higher volatility in 2020. 
+
+From the plots we can see that Cumulative impact is positive, it could mean that the dependent variable TCU is affected when inflation increases, there will be an increase in output capacity, which will return to normality as the economy will adjust the new equilibrium.
+
+## Bivariate VAR(p) Model
+
+```{r}
+VARselect(data.set, lag.max=5, type="none",  season = NULL, exogen = NULL)$selection
+VARselect(data.set, lag.max=5, type="const", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=5, type="trend", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=5, type="both",  season = NULL, exogen = NULL)$selection	  	             
+
+VARselect(data.set, lag.max=10, type="none",  season = NULL, exogen = NULL)$selection
+VARselect(data.set, lag.max=10, type="const", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=10, type="trend", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=10, type="both",  season = NULL, exogen = NULL)$selection	  	             
+
+VARselect(data.set, lag.max=20, type="none",  season = NULL, exogen = NULL)$selection
+VARselect(data.set, lag.max=20, type="const", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=20, type="trend", season = NULL, exogen = NULL)$selection	  
+VARselect(data.set, lag.max=20, type="both",  season = NULL, exogen = NULL)$selection
+
+	# Set optimal lag length using the code from the previous sections:
+
+
+optimal.lags = 2
+
+```
+
+## Reduced-form VAR(p) with p = optimal.lags:
+```{r}
+
+	# Reduced-form VAR(p) with p = optimal.lags:
+	
+	
+var.model.none  <- VAR(data.set,  p=optimal.lags, type="none",  exogen=NULL)
+summary(var.model.none)
+
+
+
+var.model.const  <- VAR(data.set, p=optimal.lags, type="const", exogen=NULL)
+summary(var.model.const)
+
+
+
+var.model.trend  <- VAR(data.set, p=optimal.lags, type="trend", exogen=NULL)
+summary(var.model.trend)
+
+
+
+var.model.both   <- VAR(data.set, p=optimal.lags, type="both",  exogen=NULL)
+summary(var.model.both)
+
+
+	# Recursive VAR: Order the variables
+	# Cholesky decompositions for orthogonal errors:
+	
+
+
+	# Ordering: Inflation --> TCU
+  
+  ordered.data.set = data.set[, c("Inflation","TCU")]
+
+
+
+
+	# Estimate the ordered VARs:
+
+var.ordered.none   <- VAR(ordered.data.set,  p=optimal.lags,   type="none",    exogen=NULL)
+var.ordered.const  <- VAR(ordered.data.set,  p=optimal.lags,   type="const",   exogen=NULL)
+var.ordered.trend  <- VAR(ordered.data.set,  p=optimal.lags,   type="trend",   exogen=NULL)
+var.ordered.both   <- VAR(ordered.data.set,  p=optimal.lags,   type="both",    exogen=NULL)
+```
+
+# Bivariate VEC(p) Model - Version 1: using package "urca"
+```{r}
+
+	# Using package "urca" and function 'ca.jo'
+
+
+
+optimal.lags = 2
+
+
+
+        # Null hypothesis: Ho = no cointegration (r=0)
+        # You need to reject the null to get cointegration (r=1).
+        # r = number of cointegration relations
+
+
+
+	# Linear trend outside of the cointegrating vector; 
+	# No constant and no trend in the cointegrating vector
+
+
+johansen.none = ca.jo(data.set, type="eigen", ecdet="none",  K = optimal.lags, spec="longrun")
+	summary(johansen.none)
+
+
+johansen.none = ca.jo(data.set, type="trace", ecdet="none",  K = optimal.lags, spec="longrun")
+	summary(johansen.none)
+
+
+
+VECM = cajorls(johansen.none, r = 1)
+VECM
+
+
+```
+## With constant in the cointegrating vector:
+```{r}
+	# With constant in the cointegrating vector:
+
+
+johansen.const = ca.jo(data.set, type="eigen", ecdet="const",  K = optimal.lags, spec="longrun")
+	summary(johansen.const)
+
+
+johansen.const = ca.jo(data.set, type="trace", ecdet="const",  K = optimal.lags, spec="longrun")
+	summary(johansen.const)
+
+VECM = cajorls(johansen.const, r = 1)
+VECM
+
+```
+
+
+```{r}
+	# With trend in the cointegrating vector:
+
+johansen.trend = ca.jo(data.set, type="eigen", ecdet="trend",  K = optimal.lags, spec="longrun")
+	summary(johansen.trend)
+
+johansen.trend = ca.jo(data.set, type="trace", ecdet="trend",  K = optimal.lags, spec="longrun")
+	summary(johansen.trend)
+
+```
+
+```{r}
+
+VECM = cajorls(johansen.trend, r = 1)
+VECM
+
+```
+
+## Likelihood ratio test for no linear trend
+```{r}
+
+	# This corresponds to the inclusion of a constant in the error correction term
+	# Function "lttest" in package "urca"
+	# Ho = no linear trend
+
+
+linear.trend.test = lttest(johansen.none,  r=1)
+
+linear.trend.test = lttest(johansen.const, r=1)
+
+linear.trend.test = lttest(johansen.trend, r=1)
+
+```
+
+## Transform VEC into VAR in levels, using package "vars"
+```{r}
+
+	# Transform VEC into VAR in levels, using package "vars"
+	# r = number of cointegrating vectors
+	# It is then possible to compute and plot IRFs, FEVD, and Diagnosis Tests
+
+
+VECM = vec2var(johansen.none,  r = 1)
+
+VECM = vec2var(johansen.const, r = 1)
+
+VECM = vec2var(johansen.trend, r = 1)
+
+
+
+```
+
+## Diagnostic Checks:
+```{r}
+
+	# Serial correlation test
+	# Ho = residuals do not have serial correlation
+
+
+serialtest <- serial.test(VECM, type = "PT.asymptotic")
+serialtest
+
+serialtest <- serial.test(VECM, type = "PT.adjusted")
+serialtest
+
+serialtest <- serial.test(VECM, type = "BG")
+serialtest
+
+serialtest <- serial.test(VECM, type = "ES")
+serialtest
+
+
+plot(serialtest)
+```
+
+
+## Normality test
+```{r}
+
+	# Jarque-Bera normality test of jointly normal residuals
+	# Non-normal residuals distort estimates and confidence intervals
+	# Test whether the multivariate skewness and kurtosis match a normal distribution
+	# Joint Ho = skewness is zero, and excess kurtosis is zero
+	# Non-normal residuals are a problem in small samples but less so in large samples (due to asymptotic properties)
+
+
+
+normalitytest <- normality.test(VECM)
+normalitytest
+
+```
+
+
+
+## Structural VAR: Order the variables
+## Cholesky decompositions (for orthogonal errors):
+```{r}
+
+
+
+	# Ordering: Inflation --> TCU
+  
+ordered.data.set = data.set[, c("Inflation","TCU")]
+
+	# Structural VECM using the Cholesky decomposition via the ordered data set:
+
+johansen.const = ca.jo(ordered.data.set, type="eigen", ecdet="const",  K = optimal.lags, spec="longrun")
+	summary(johansen.const)
+
+
+johansen.const = ca.jo(ordered.data.set, type="eigen", ecdet="const",  K = optimal.lags, spec="transitory")
+	summary(johansen.const)
+
+
+
+VECM = vec2var(johansen.const, r = 1)
+
+
+```
+
+## FEVD: Forecast error variance decomposition:
+```{r} 
+
+plot(fevd(VECM,  n.ahead=20))
+
+```
+
+##  IRF: Impulse response functions:
+```{r}
+
+
+	
+	#Short run (non-cumulative):
+
+  plot(irf(VECM, impulse="TCU", n.ahead=20, ortho=TRUE, cumulative=FALSE, boot=TRUE, ci=0.90, runs=100, seed=NULL))
+
+
+  plot(irf(VECM,  impulse="Inflation", response="TCU", n.ahead=20, ortho=TRUE, cumulative=FALSE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="Inflation to TCU", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+
+
+  plot(irf(var.ordered.none,  impulse="TCU", response="Inflation", n.ahead=20, ortho=TRUE, cumulative=FALSE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="TCU to Inflation", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+
+  plot(irf(var.ordered.const,  impulse="Inflation", response="TCU", n.ahead=20, ortho=TRUE, cumulative=FALSE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="Inflation to TCU", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+
+  plot(irf(var.ordered.const,  impulse="TCU", response="Inflation", n.ahead=20, ortho=TRUE, cumulative=FALSE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="TCU to Inflation", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+```
+
+## Long run (cumulative):
+```{r message=FALSE, warning=FALSE}
+
+par( mfrow=c(1,1)) 
+plot(irf(VECM), cumulative=TRUE)
+
+
+plot(irf(var.ordered.none,  impulse="Inflation", response="TCU", n.ahead=20, ortho=TRUE, cumulative=TRUE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="Inflation to TCU", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+
+plot(irf(var.ordered.none,  impulse="TCU", response="Inflation", n.ahead=20, ortho=TRUE, cumulative=TRUE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="Inflation to TCU", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+
+
+
+
+plot(irf(var.ordered.const,  impulse="Inflation", response="TCU", n.ahead=20, ortho=TRUE, cumulative=TRUE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="Inflation to TCU", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+
+plot(irf(var.ordered.const,  impulse="TCU", response="Inflation", n.ahead=20, ortho=TRUE, cumulative=TRUE, boot=TRUE, ci=0.90, runs=100, seed=NULL),
+			main="TCU to Inflation", xlab="Lag", ylab="", sub="", oma=c(3,0,3,0))
+
+```
+
+## Toda-Yamamoto Causality Test (Granger-causality test for non-stationary time series)
+```{r}
+
+# Toda-Yamamoto Causality Test (Granger-causality test for non-stationary time series)
+
+   
+   Toda.Yamamoto = function(var) {
+  
+       # Add the extra lag to the VAR model:
+
+     ty.df             =  eval(var$call$y);
+     ty.varnames       =  colnames(ty.df);
+     ty.lags           =  var$p + 1;
+     ty.augmented_var  =  VAR(ty.df, ty.lags, type=var$type);
+
+     ty.results = data.frame(predictor = character(0), causes = character(0), chisq = numeric(0), p = numeric(0));
+
+
+     for (current_variable in ty.varnames) {
+
+
+        # Construct the restriction matrix to test if "current_variable" causes any of the other variables.
+        # We test if the lagged values of the "current variable" (ignoring the extra lag) are jointly insignificant.
+
+    ty.restrictions = as.matrix(Bcoef(ty.augmented_var))*0+1;
+    ty.coefres      = head(grep(current_variable, colnames(ty.restrictions), value=T), -1);
+    ty.restrictions[which(rownames(ty.restrictions) != current_variable), ty.coefres] = 0;
+
+
+        # Estimate the restricted VAR:
+
+    ty.restricted_var = restrict(ty.augmented_var, 'manual', resmat=ty.restrictions);
+
+    for (k in 1:length(ty.varnames)) {
+
+      if (ty.varnames[k] != current_variable) {
+
+        my.wald    = waldtest(ty.augmented_var$varresult[[k]], ty.restricted_var$varresult[[k]], test='Chisq');
+
+        ty.results = rbind(ty.results, data.frame(
+
+                                          predictor  =  current_variable, 
+                                             causes  =  ty.varnames[k], 
+                                              chisq  =  as.numeric(my.wald$Chisq[2]), 
+                                                  p  =  my.wald$`Pr(>Chisq)`[2])
+                                                  );
+         }}}
+      return(ty.results);
+         }
+
+
+   # Run the Toda-Yamamoto causality test:
+   # Note that this part uses the VAR model you estimated before.
+
+
+        var = var.model.const
+
+        Toda.Yamamoto(var)
+
+```
+
+
+
+According to the Toda-Yamamoto Causality Test we can see that both series cause each other at the 5% confidence interval.  
+
+
+# Arima model for forecasting 
+
+```{r}
+
+
+# Select a time series:
+# We need to use the time series in levels, even if they have a unit root and thus are non-stationary
+# No need to first-difference the data at this point
+
+
+z = Inflation
+
+
+
+
+#------- ACF and PACF ----------------------------------------------------------------------------------------------------------------------#
+
+
+par(mfrow=c(2,2))
+acf     (z,          main="ACF for z (levels)")
+pacf    (z,          main="PACF for z (levels)")
+acf     (diff(z),    main="ACF for z (first difference)")
+pacf    (diff(z),    main="PACF for z (first difference)")
+
+
+```
+
+
+```{r}
+
+
+# "forecast::auto.arima()" means you are using function "auto.arima()" from package "forecast"
+
+
+
+arima.model = forecast::auto.arima(z,
+                                   
+                                   D = 1,
+                                   stationary = FALSE,
+                                   ic = c("aicc", "aic", "bic"),
+                                   stepwise = FALSE,
+                                   approximation = FALSE,
+                                   seasonal = TRUE,
+                                   allowdrift = TRUE   ) 
+
+
+arima.model
+
+```
+
+```{r}
+
+plot(arima.model)             
+
+```
+
+
+```{r}
+
+
+# Plot the residuals of the ARIMA model
+# The model residuals must not have any systematic behavior
+# Any systematic behavior indicates that the residuals are not white noise
+
+
+plot(resid(arima.model))
+
+```
+
+```{r}
+
+
+# Plot the histogram of the residuals, together with the ACF and PACF of the residuals:
+
+
+
+residuals = resid(arima.model)
+
+
+
+par(mfrow = c(2, 2))
+plot( residuals )                 # Plot the residuals over time
+abline( h=0, col="red" )
+hist( residuals, col="orange")    # Plot histogram of the residuals
+acf( residuals )                 # Plot ACF
+pacf( residuals )                 # Plot PACF
+
+
+
+
+
+
+#---- BDS test -----
+#  Ho: series of i.i.d. random variable
+#  Ha: series is not i.i.d.
+
+
+bds.test(residuals)                     
+
+
+```
+
+```{r}
+
+#---- Jarque-Bera Normality Test ------
+# Ho = series is normaly distributed = kurtosis is zero and skewness is zero
+# Ha = series is not normally distributed
+# Using package "tseries"
+
+
+jarque.bera.test(residuals)             
+jarque.bera.test(resid(arima.model))
+
+
+```
+
+
+```{r}
+
+
+#---- Shapiro-Wilk Normality Test -----
+# Ho = series is normaly distributed = kurtosis is zero and skewness is zero
+# Ha = series is not normally distributed
+
+
+shapiro.test(resid(arima.model)) 
+
+
+
+
+```
+
+```{r}
+
+
+#---- Ljung-Box -----
+# Use lag > fitdf, in which fitdf=(p+q) because the series we are testing are the residuals from an estimated ARMA(p,q) model.
+# H0: series is independent; H1: series has dependence across lags
+# Test statistic is distributed as a chi-squared random variable
+# Desired result: p-value of the Ljung-Box test on the ARIMA residuals is high and, hence, the ARIMA residuals are not auto-correlated over time.
+# But if p-value is small then reject the null and conclude that the residuals are auto-correlated and, hence, are not white noise.
+
+
+Box.test(resid(arima.model), lag = 2, fitdf=0)
+
+Box.test(resid(arima.model), lag = 2, type= "Ljung", fitdf=0)
+
+Box.test(resid(arima.model), lag = 3, type= "Ljung", fitdf=0)
+
+Box.test(resid(arima.model), lag = 10, type= "Ljung", fitdf=0)
+
+```
+
+
+```{r}
+
+# Use the estimated ARIMA model to forecast future values of the time series:
+
+# Out-of-sample forecasting:
+# "forecast::forecast()" means you are using function forecast() from package "forecast"
+
+
+ARIMA.forecast = forecast::forecast(arima.model, h = 10)
+
+plot(ARIMA.forecast)
+abline(h=0)
+
+
+
+plot(forecast::forecast(arima.model))
+
+
+```
+From this forecast we can see that inflation should increase before decreasing to its previous level.
+
+# Conclusion 
+
+Overall we saw that the series are correlated to each other, we saw that the residuals of the TCU time series were not normally distributed. Both series have a unit root, which means that both have a stochastic trend, they didn't have a unit root in first differences. The cointegration tests proved that the two time series are cointegrated, which means that they have a long run relationship. We run the ARDL model in levels to understand the long run relationship between the two series, we used the the error correction form to test fo the significance of this long run relationship. the results show that Inflation has a positive cumulative effect on TCU. We used the VEC model which is the VAR model with the Error correction term.  From the Impulse response function we saw that Inflation affects TCU in a positive war in both the short and long run. TCU also affects inflation in the short and long run as well. We then used the ARIMA model on the inflation series for forecasting. The out of sample ARIMA model forecasted an increase in inflation which would follow by a decrease decrease. 
